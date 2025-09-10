@@ -1,0 +1,6 @@
+keyboard
+pygetwindow
+pillow
+pywin32
+python-dotenv
+pyinstaller

